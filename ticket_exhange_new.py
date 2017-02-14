@@ -8,12 +8,32 @@ from time import sleep
 
 # EVENT_ID = '6474' # Bayern
 EVENT_ID = '6477'  # Leicester
+TICKET_QUANTITY = '1'
+MIN_PRICE = '0.00'
+MAX_PRICE = '101.50'
 
 
+# URLS
 root_url = 'https://www.eticketing.co.uk/arsenal/'
+basket_url = root_url + "/basket.aspx"
 login_url = root_url + 'Authentication/Login/Process'
 event_url = root_url + 'details/event.aspx?itemref={event_id}'.format(event_id=EVENT_ID)
 event_post_url = event_url + '&anthem_callback=true'
+
+# JSON KEYS
+
+select_ticket_exchange_json = 'ctl00$body$seatselection1$selectionmodes1$repeaterModes$ctl02$ctl02'
+ticket_exchange_best_avl_json = 'ctl00$body$seatselection1$bestavailable1$fliptoback'
+ticket_exchange_response_json = 'ctl00$body$seatselection1$bestavailable1$panelflip'
+ticket_purchase_response_json = 'ctl00$body$seatselection1$bestavailable1$avs1'
+ticket_request_json = 'ctl00$body$seatselection1$bestavailable1$repeaterPriceClassesTX$ctl00$'
+price_class_html_id = '#ctl00_body_seatselection1_bestavailable1_repeaterPriceClassesTX_ctl00_hiddenPriceClassTX'
+price_class_json = ticket_request_json + 'hiddenPriceClassTX'
+ticket_quantity_json = ticket_request_json + 'listQtyTX'
+min_price_json = ticket_request_json + 'minprice'
+max_price_json = ticket_request_json + 'maxprice'
+
+# PAYLOADS
 
 debug_proxies = {
     'http': 'http://127.0.0.1:8080',
@@ -57,7 +77,7 @@ def login(url, ev_url, session, payload, proxies=None):
         session.post(url, data=payload)
 
     # Get the response from the server
-    event_response = s.get(ev_url)
+    event_response = session.get(ev_url)
     event_page = PyQuery(event_response.text)
 
     # Occasionally the servers will be busy. Here we wait until the response for the event page
@@ -65,7 +85,7 @@ def login(url, ev_url, session, payload, proxies=None):
     while event_page("title").text() == 'Please Wait - eTickets':
         print("In the queue...")
         sleep(10)
-        event_response = s.get(event_url)
+        event_response = session.get(event_url)
         event_page = PyQuery(event_response.text)
 
     # Once we have got the correct response we send back the ViewState
@@ -112,128 +132,94 @@ def get_cookies(session):
     return requests.utils.dict_from_cookiejar(session.cookies)
 
 
-def format_cookies(requests_cookies):
+def format_cookies(cookies):
     """
     Formats cookies from the Requests module to be available to use in selenium
-    :param requests_cookies: The cookies t
+    :param cookies: The cookies t
     :return:
     """
     formatted_cookies = []
-    for cookie in requests_cookies.keys():
+    for cookie in cookies.keys():
         formatted_cookies.append({'name': cookie, 'value': cookies[cookie]})
     return formatted_cookies
 
 
-def open_basket(cookie_dict):
+def open_basket(cookies):
     """
     Opens the arsenal shopping basket in firefox with the correct cookies set
-    :param cookie_dict: The cookies in the format {name: key, value: value} for each cookie
+    :param cookies: The cookies in the format {name: key, value: value} for each cookie
     """
-    driver = webdriver.Firefox()
-    driver.get("https://www.eticketing.co.uk/arsenal")
-    for cookie in cookie_dict:
+    driver = webdriver.Chrome()
+    driver.get(root_url)
+    for cookie in cookies:
         driver.add_cookie(cookie)
-    driver.get("https://www.eticketing.co.uk/arsenal/basket.aspx")
+    driver.get(basket_url)
 
 
-# Login
-s = requests.Session()
-response = login(login_url, event_url, s, login_payload, debug_proxies)
-view_state = response['viewState']
-
-# Select the ticket exchange part
-
-post_payload['__EVENTTARGET'] = 'ctl00$body$seatselection1$selectionmodes1$repeaterModes$ctl02$ctl02'
-post_payload['__VIEWSTATE'] = view_state
-
-view_state = page_request(event_post_url, post_payload, s, debug_proxies)
-
-# Select the Ticket Exchange best available
-
-post_payload['__EVENTTARGET'] = 'ctl00$body$seatselection1$bestavailable1$fliptoback'
-post_payload['__VIEWSTATE'] = view_state
-
-view_state = page_request(event_post_url, post_payload, s, debug_proxies)
+def update_payload_event(payload, target, view_state):
+    """
+    Updates the request payload dictionary with new Event Target values.
+    :param payload: The request payload with the original values
+    :param target: The new EventTarget to change the payload to
+    :param view_state: The updated ViewState of the request
+    """
+    payload['__EVENTTARGET'] = target
+    payload['__VIEWSTATE'] = view_state
 
 
-post_data = {
-    'Anthem_UpdatePage': 'true',
-    '__EVENTTARGET': 'ctl00$body$seatselection1$bestavailable1$fliptoback',
-    '__EVENTARGUMENT': '',
-    '__VIEWSTATE': view_state,
-    '__VIEWSTATEGENERATOR': 'B7FC5CAC'
-}
+def main():
+    # Login
+    s = requests.Session()
+    response = login(login_url, event_url, s, login_payload, debug_proxies)
+    view_state = response['viewState']
 
-r = s.post(event_post_url, data=post_data, proxies=debug_proxies, verify=False)
-ticket_response = json.loads(r.text)
-view_state = ticket_response['viewState']
-response_html = PyQuery(ticket_response['controls']['ctl00$body$seatselection1$bestavailable1$panelflip'])
-price_class = response_html(
-    '#ctl00_body_seatselection1_bestavailable1_repeaterPriceClassesTX_ctl00_hiddenPriceClassTX').attr('value')
+    # Select the ticket exchange part
 
-# Request a ticket
+    update_payload_event(post_payload, select_ticket_exchange_json, view_state)
+    response = page_request(event_post_url, post_payload, s, debug_proxies)
+    view_state = response['viewState']
 
+    # Select the Ticket Exchange best available
 
-post_data = {
-    'Anthem_UpdatePage': 'true',
-    '__EVENTTARGET': 'ctl00$body$seatselection1$bestavailable1$cmdAddToBasketTX',
-    '__EVENTARGUMENT': '',
-    '__VIEWSTATE': view_state,
-    '__VIEWSTATEGENERATOR': 'B7FC5CAC',
-    'ctl00$body$seatselection1$bestavailable1$repeaterPriceClassesTX$ctl00$hiddenPriceClassTX': price_class,
-    'ctl00$body$seatselection1$bestavailable1$repeaterPriceClassesTX$ctl00$listQtyTX': '1',
-    'ctl00$body$seatselection1$bestavailable1$repeaterPriceClassesTX$ctl00$minprice': '0.00',
-    'ctl00$body$seatselection1$bestavailable1$repeaterPriceClassesTX$ctl00$maxprice': '101.50'
-}
+    update_payload_event(post_payload, ticket_exchange_best_avl_json, view_state)
+    response = page_request(event_post_url, post_payload, s, debug_proxies)
+    view_state = response['viewState']
 
-r = s.post(event_post_url, data=post_data, proxies=debug_proxies, verify=False)
-ticket_response = json.loads(r.text)
+    # Get the price class from the response HTML
 
-if is_ticket_found(ticket_response):
+    response_html = PyQuery(response['controls'][ticket_exchange_response_json])
+    price_class = response_html(price_class_html_id).attr('value')
+
+    # Request a ticket
+    i = 1
+    print("Attempt " + str(i))
+
+    update_payload_event(post_payload, ticket_exchange_best_avl_json, view_state)
+    post_payload[price_class_json] = price_class
+    post_payload[ticket_request_json] = TICKET_QUANTITY
+    post_payload[min_price_json] = MIN_PRICE
+    post_payload[max_price_json] = MAX_PRICE
+
+    response = page_request(event_post_url, post_payload, s, debug_proxies)
+
+    # Keep trying till we get a ticket
+    while not is_ticket_found(response):
+        sleep(randint(6, 10))
+        print("Attempt " + str(i))
+        i += 1
+
+        # Print the error message
+        message = PyQuery(response['controls'][ticket_purchase_response_json])
+        resp_msg = message('ul#errorsummary').children('li')[0].text
+        print(resp_msg)
+
+        view_state = response['viewState']
+        update_payload_event(post_payload, ticket_exchange_best_avl_json, view_state)
+
     print("TICKET FOUND! LOG ON AND USE THESE COOKIE VALUES:")
     cookies = get_cookies(s)
     print(cookies)
     open_basket(cookies)
-    sys.exit()
-    # return
 
-view_state = ticket_response['viewState']
-
-# Get the response
-message = PyQuery(ticket_response['controls']['ctl00$body$seatselection1$bestavailable1$avs1'])
-print(message)
-
-resp_msg = message('ul#errorsummary').children('li')[0].text
-error_msg = 'None of the prices you selected could be found. Please try back later.'
-
-while error_msg == resp_msg:
-    post_data = {
-        'Anthem_UpdatePage': 'true',
-        '__EVENTTARGET': 'ctl00$body$seatselection1$bestavailable1$cmdAddToBasketTX',
-        '__EVENTARGUMENT': '',
-        '__VIEWSTATE': view_state,
-        '__VIEWSTATEGENERATOR': 'B7FC5CAC',
-        'ctl00$body$seatselection1$bestavailable1$repeaterPriceClassesTX$ctl00$hiddenPriceClassTX': price_class,
-        'ctl00$body$seatselection1$bestavailable1$repeaterPriceClassesTX$ctl00$listQtyTX': '1',
-        'ctl00$body$seatselection1$bestavailable1$repeaterPriceClassesTX$ctl00$minprice': '0.00',
-        'ctl00$body$seatselection1$bestavailable1$repeaterPriceClassesTX$ctl00$maxprice': '101.50'
-    }
-
-    r = s.post(event_post_url, data=post_data, proxies=debug_proxies, verify=False)
-    ticket_response = json.loads(r.text)
-
-    if is_ticket_found(ticket_response):
-        print("TICKET FOUND! LOG ON AND USE THESE COOKIE VALUES:")
-        cookies = get_cookies(s)
-        print(cookies)
-        open_basket(cookies)
-        sys.exit()
-
-    view_state = ticket_response['viewState']
-
-    message = PyQuery(ticket_response['controls']['ctl00$body$seatselection1$bestavailable1$avs1'])
-    print(message)
-
-    resp_msg = message('ul#errorsummary').children('li')[0].text
-    sleep(randint(1, 3))
-
+if __name__ == '__main__':
+    main()
